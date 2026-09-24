@@ -2,6 +2,9 @@
 
 This repository contains an autonomous AI agent capable of executing complex multi-step tasks in a web browser, fully complying with the provided SDD 1.0.0 specification.
 
+## Demo (Vids)
+https://drive.google.com/drive/folders/1BMxzL1vHEh2l47oEQEDMHhkj7WdgnfCo?usp=sharing
+
 ## Components
 
 1. **`mcp_server.py`**: A Model Context Protocol (MCP) server that exposes Playwright browser capabilities. It handles:
