@@ -2,9 +2,6 @@
 
 This repository contains an autonomous AI agent capable of executing complex multi-step tasks in a web browser, fully complying with the provided SDD 1.0.0 specification.
 
-## Demo (Vids)
-https://drive.google.com/drive/folders/1BMxzL1vHEh2l47oEQEDMHhkj7WdgnfCo?usp=sharing
-
 ## Components
 
 1. **`mcp_server.py`**: A Model Context Protocol (MCP) server that exposes Playwright browser capabilities. It handles:
@@ -55,3 +52,16 @@ Add the following to your MCP configuration:
 - Type: `stdio`
 - Command: `python`
 - Args: `mcp_server.py` (ensure you use the absolute path or run from this directory).
+
+## Pre-authenticating or Manual Browsing
+Since the agent uses a persistent browser profile (`playwright_data` directory), you can manually open the browser to log in to websites beforehand.
+Just run this helper command in your terminal before starting the agent:
+
+```bash
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch_persistent_context('playwright_data', headless=False); page = browser.new_page(); page.pause()"
+```
+This will open a visible Playwright browser. You can navigate, log in to GitHub/HH.ru/etc. When you are done, close the browser window. The session cookies will be saved in `playwright_data` and the agent will use them automatically!
+
+
+### ⚠️ Important Note for Claude Code / IDE Users
+Do **not** run `mcp_server.py` manually in your terminal or IDE (like PyCharm). MCP servers communicating over `stdio` are meant to be spawned automatically by the client (Claude Code). If you run it manually, it will wait for JSON-RPC inputs on `stdin` indefinitely and Claude Code will fail to connect with a `-32000` error.

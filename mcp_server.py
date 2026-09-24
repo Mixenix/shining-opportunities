@@ -27,7 +27,7 @@ class BrowserManager:
         self.playwright = await async_playwright().start()
         os.makedirs(USER_DATA_DIR, exist_ok=True)
 
-        headless = False
+        headless = True
         self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
             headless=headless
@@ -69,8 +69,16 @@ browser_manager = BrowserManager()
 
 @mcp_server.tool()
 async def browser_navigate(url: str) -> str:
-    """Navigates to a URL. Includes built-in networkidle wait."""
-    await browser_manager.page.goto(url, wait_until="networkidle")
+    """Navigates to a URL. Includes built-in wait."""
+    try:
+        await browser_manager.page.goto(url, wait_until="domcontentloaded", timeout=15000)
+    except Exception:
+        try:
+            await browser_manager.page.goto(url, wait_until="commit", timeout=15000)
+        except Exception:
+            pass
+    # Give the page a tiny bit of time to render JS
+    await browser_manager.page.wait_for_timeout(1500)
     browser_manager.current_frame = browser_manager.page
     await browser_manager.save_state()
     return f"Navigated to {url}"
@@ -90,17 +98,16 @@ async def browser_snapshot(boxes: bool = False) -> str:
         # We will parse the CDP AXTree which has a different format
         # nodes are in snapshot['nodes']
 
-        tree_map = {node['nodeId']: node for node in snapshot.get('nodes', [])}
+        nodes = snapshot.get("nodes", [])
+        tree_map = {node["nodeId"]: node for node in nodes}
 
         def process_node(node_id):
             if node_id not in tree_map: return None
             node = tree_map[node_id]
 
-            # Extract basic info
             role = node.get("role", {}).get("value")
             name = node.get("name", {}).get("value")
 
-            # Check if interactive or has name
             is_interesting = role in ["button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "switch", "slider", "spinbutton", "menuitem", "tab", "treeitem"] or name
 
             result = {}
@@ -111,7 +118,6 @@ async def browser_snapshot(boxes: bool = False) -> str:
                 result["role"] = role
                 result["name"] = name
 
-                # Save to refs for interaction
                 browser_manager.refs[ref_id] = {
                     "role": role,
                     "name": name,
@@ -125,7 +131,6 @@ async def browser_snapshot(boxes: bool = False) -> str:
                     if is_interesting:
                         children.append(child_result)
                     else:
-                        # flatten if this node isn't interesting but children are
                         if isinstance(child_result, list):
                             children.extend(child_result)
                         else:
@@ -138,7 +143,15 @@ async def browser_snapshot(boxes: bool = False) -> str:
             else:
                 return children if children else None
 
-        root_id = snapshot.get("nodes", [{}])[0].get("nodeId")
+        root_id = None
+        for node in nodes:
+            if node.get("role", {}).get("value") == "RootWebArea":
+                root_id = node.get("nodeId")
+                break
+
+        if not root_id and nodes:
+            root_id = nodes[0].get("nodeId")
+
         simplified_tree = process_node(root_id) if root_id else []
 
         # Make sure it's a dict or list for JSON serialization
@@ -158,12 +171,22 @@ async def browser_click(ref: str) -> str:
 
     try:
         node = browser_manager.refs[ref]
-        role = node.get('role', 'generic')
-        name_val = node.get('name')
-        loc = target.get_by_role(role, name=name_val) if name_val else target.get_by_role(role)
-        loc = loc.first
-        await loc.click()
-        await browser_manager.page.wait_for_load_state("networkidle")
+        backend_id = node.get('backendNodeId')
+
+        client = await browser_manager.page.context.new_cdp_session(browser_manager.page)
+
+        # Get coordinates
+        box = await client.send("DOM.getBoxModel", {"backendNodeId": backend_id})
+        quad = box["model"]["border"]
+        x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
+        y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+
+        # Native click
+        await browser_manager.page.mouse.click(x, y)
+
+        # Small wait for React to process click, no strict networkidle required
+        await browser_manager.page.wait_for_timeout(500)
+
         await browser_manager.save_state()
         return f"Clicked on {ref}"
     except Exception as e:
@@ -178,14 +201,30 @@ async def browser_type(ref: str, value: str, press_enter: bool = False) -> str:
 
     try:
         node = browser_manager.refs[ref]
-        role = node.get('role', 'generic')
-        name_val = node.get('name')
-        loc = target.get_by_role(role, name=name_val) if name_val else target.get_by_role(role)
-        loc = loc.first
-        await loc.fill(value)
+        backend_id = node.get('backendNodeId')
+
+        client = await browser_manager.page.context.new_cdp_session(browser_manager.page)
+
+        # Click to focus
+        box = await client.send("DOM.getBoxModel", {"backendNodeId": backend_id})
+        quad = box["model"]["border"]
+        x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
+        y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+
+        await browser_manager.page.mouse.click(x, y)
+
+        # Select all and delete (Cmd+A/Ctrl+A -> Backspace) to clear
+        await browser_manager.page.keyboard.press("Meta+A")
+        await browser_manager.page.keyboard.press("Control+A")
+        await browser_manager.page.keyboard.press("Backspace")
+
+        # Type value
+        await browser_manager.page.keyboard.type(value, delay=10) # 10ms delay simulates human
+
         if press_enter:
-            await loc.press("Enter")
-            await browser_manager.page.wait_for_load_state("networkidle")
+            await browser_manager.page.keyboard.press("Enter")
+
+        await browser_manager.page.wait_for_timeout(500)
         await browser_manager.save_state()
         return f"Typed '{value}' into {ref}"
     except Exception as e:
