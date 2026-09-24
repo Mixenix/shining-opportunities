@@ -12,6 +12,7 @@ import mcp.types as types
 # Setup OpenAI client for DeepSeek V4.1-Flash (or compatible API)
 API_KEY = os.environ.get("DEEPSEEK_API_KEY", "dummy_key")
 BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+#test
 
 client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 
